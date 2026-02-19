@@ -2,3 +2,9 @@ body
 {
     background: gray;
 }
+
+a.logo {
+    display: flex;
+    margin-bottom: 0;
+    text-decoration: none;
+}

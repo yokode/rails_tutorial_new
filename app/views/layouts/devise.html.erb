@@ -27,11 +27,7 @@
   <body>
     <div class="vh-100">
         <div class="h-100 justify-content-center align-items-center d-flex flex-column">
-            <%= link_to(root_path, class: 'navbar-brand') do %>
-                <h2>
-                    <i class="bi bi-safe-fill me-2"></i> SafePass
-                </h2>
-            <% end %>
+            <%= logo %>
             <div class="card card--auth shadow-sm w-100">
                 <div class="card-body">
                     <%= yield %>
