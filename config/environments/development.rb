@@ -4,6 +4,8 @@ Rails.application.configure do
   # Settings specified here will take precedence over those in config/application.rb.
   config.hosts << /.*\.app\.github\.dev/
 
+  config.action_controller.forgery_protection_origin_check = false
+
   # Make code changes take effect immediately without server restart.
   config.enable_reloading = true
 
