@@ -1,0 +1,89 @@
+name: PR review (Cursor)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  basic-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Strip AI context files
+        run: |
+          set -euo pipefail
+          rm -f AGENTS.md api/AGENTS.md admin/.agents/skills/orval/AGENTS.md
+          rm -rf docs/memory
+          rm -f .cursor/rules/cursor-instructions.mdc
+          rm -f admin/.cursor/rules/cursor-instructions.mdc
+          rm -f api/.cursor/rules/*.mdc
+      
+      - name: Fetch previous review comment
+        id: prev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BODY=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- cursor-review-sha:"))' \
+            | jq -s -r 'last // empty | .body // empty')
+
+          if [ -n "$BODY" ]; then
+            SHA=$(echo "$BODY" | grep -oP '(?i)<!--\s*cursor-review-sha:\s*\K[0-9a-fA-F]+(?=\s*-->)' || true)
+            if [ -n "$SHA" ] && git cat-file -e "$SHA" 2>/dev/null; then
+              echo "incremental=true" >> "$GITHUB_OUTPUT"
+              echo "$BODY" > .prev-review.md
+            else
+              echo "incremental=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "incremental=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write PR diff artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr diff '${{ github.event.pull_request.number }}' > .pr-diff.patch
+          gh pr diff '${{ github.event.pull_request.number }}' --name-only > .changed-files.txt
+
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Run basic-review and post PR comment
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_MODEL: ${{ vars.CURSOR_REVIEW_MODEL || 'auto' }}
+          REVIEW_INCREMENTAL: ${{ steps.prev.outputs.incremental }}
+        run: |
+          set -euo pipefail
+
+          if [ "$REVIEW_INCREMENTAL" = "true" ]; then
+            PROMPT="Follow the instructions in .cursor/skills/basic-review/SKILL.md. The PR unified diff is in .pr-diff.patch and the changed paths are listed in .changed-files.txt (both written by CI). This is an incremental review — the previous review is in .prev-review.md. Re-verify previous findings against the current code. Do NOT modify any files, commit, push, or post PR comments. Only output the review."
+          else
+            PROMPT='Follow the instructions in .cursor/skills/basic-review/SKILL.md. The PR unified diff is in .pr-diff.patch and the changed paths are listed in .changed-files.txt (both written by CI). Do NOT modify any files, commit, push, or post PR comments. Only output the review.'
+          fi
+
+          REVIEW=$(agent -p --trust --output-format text --model "$REVIEW_MODEL" "$PROMPT")
+          SHA=$(git rev-parse HEAD)
+          {
+            echo "$REVIEW"
+            echo ""
+            echo "<!-- cursor-review-sha: $SHA -->"
+          } | gh pr comment "${{ github.event.pull_request.number }}" --edit-last --create-if-none --body-file -
